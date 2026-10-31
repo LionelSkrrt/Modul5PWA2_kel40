@@ -174,7 +174,7 @@ export default function CartPage({ onNavigateCatalog }) {
                   type="text"
                   value={waPhone}
                   onChange={handlePhoneChange}
-                  placeholder="Contoh: 6281234567890 atau 081234567890"
+                  placeholder="Contoh: 085643198271 atau 6285643198271"
                   className="form-input"
                 />
                 <span className="form-hint">
@@ -218,3 +218,4 @@ export default function CartPage({ onNavigateCatalog }) {
     </div>
   )
 }
+

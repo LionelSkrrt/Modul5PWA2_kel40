@@ -53,3 +53,4 @@ export const restoreArchivedGun = (id) => {
 export const removeFromArchive = (id) => {
   return restoreArchivedGun(id)
 }
+

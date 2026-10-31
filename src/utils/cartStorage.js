@@ -74,9 +74,9 @@ export const clearCart = () => {
 
 export const getSavedWaPhone = () => {
   try {
-    return localStorage.getItem(WA_PHONE_KEY) || '6281234567890'
+    return localStorage.getItem(WA_PHONE_KEY) || '6285643198271'
   } catch {
-    return '6281234567890'
+    return '6285643198271'
   }
 }
 
@@ -115,3 +115,4 @@ export const buildWhatsAppCheckoutUrl = (items, phone = '') => {
     ? `https://wa.me/${cleanPhone}?text=${text}`
     : `https://wa.me/?text=${text}`
 }
+
