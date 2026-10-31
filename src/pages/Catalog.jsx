@@ -1,12 +1,12 @@
-import { useState, useMemo } from 'react'
-import { RefreshCw, Plus, Loader, AlertCircle, PackageOpen } from 'lucide-react'
+import { useState, useMemo, useEffect } from 'react'
+import { RefreshCw, Plus, Loader, AlertCircle, PackageOpen, Database } from 'lucide-react'
 import { useGuns } from '../hooks/useGuns'
 import GUNS_LOCAL from '../data/guns'
 import GunCard from '../components/gun/GunCard'
 import GunDetail from '../components/gun/GunDetail'
 import AdvancedFilter from '../components/common/AdvancedFilter'
 import ConfirmModal from '../components/modals/ConfirmModal'
-import gunService from '../services/gunService'
+import { archiveGun, getArchivedGuns } from '../utils/archiveStorage'
 import {
   matchesSearch,
   matchesCategory,
@@ -17,25 +17,40 @@ import {
 /**
  * Catalog page — the main product listing.
  *
- * Data source priority:
- *   1. Live API via useGuns()
- *   2. Local static array (GUNS_LOCAL) when the API is unreachable
- *
- * Features: search, category filter, sort, CRUD actions, detail modal.
+ * Features:
+ * - Query Caching via useGuns()
+ * - URL deep-link (?gun=<id>) for shared links
+ * - Soft Delete (Archive) integration
+ * - Search, category filter, sort, detail modal
  */
 export default function Catalog({ onNavigate }) {
-  // ---- API data ----
-  const { guns: apiGuns, loading, error, refetch } = useGuns({ limit: 50 })
+  // ---- API data with Query Cache ----
+  const { guns: apiGuns, loading, error, isCached, refetch } = useGuns({ limit: 50 })
   const [useLocal, setUseLocal] = useState(false)
 
-  // Decide data source
+  // ---- Archived IDs (Soft Delete filter) ----
+  const [archivedList, setArchivedList] = useState(() => getArchivedGuns())
+
+  useEffect(() => {
+    const syncArchive = () => setArchivedList(getArchivedGuns())
+    window.addEventListener('archive-updated', syncArchive)
+    return () => window.removeEventListener('archive-updated', syncArchive)
+  }, [])
+
+  const archivedIds = useMemo(
+    () => new Set(archivedList.map((item) => String(item.id || item.name))),
+    [archivedList],
+  )
+
+  // Decide data source & filter out soft-deleted items
   const rawGuns = useMemo(() => {
-    if (useLocal || (error && apiGuns.length === 0)) {
-      // Enrich local data with synthetic ids so FavoriteButton and detail work
-      return GUNS_LOCAL.map((g, i) => ({ ...g, id: g.id || `local-${i}` }))
-    }
-    return apiGuns
-  }, [apiGuns, error, useLocal])
+    const base =
+      useLocal || (error && apiGuns.length === 0)
+        ? GUNS_LOCAL.map((g, i) => ({ ...g, id: g.id || `local-${i}` }))
+        : apiGuns
+
+    return base.filter((g) => !archivedIds.has(String(g.id || g.name)))
+  }, [apiGuns, error, useLocal, archivedIds])
 
   // ---- filters / sort ----
   const [search, setSearch] = useState('')
@@ -52,24 +67,46 @@ export default function Catalog({ onNavigate }) {
     return sortItems(result, sortKey, sortOrder)
   }, [rawGuns, search, activeCategory, sortKey, sortOrder])
 
-  // ---- detail view ----
+  // ---- detail view & deep link (?gun=...) ----
   const [selectedGun, setSelectedGun] = useState(null)
 
-  // ---- delete ----
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const sharedGunId = params.get('gun')
+    if (sharedGunId && rawGuns.length > 0 && !selectedGun) {
+      const found = rawGuns.find(
+        (g) =>
+          String(g.id) === String(sharedGunId) ||
+          String(g.name).toLowerCase() === String(sharedGunId).toLowerCase(),
+      )
+      if (found) {
+        setSelectedGun(found)
+      }
+    }
+  }, [rawGuns, selectedGun])
+
+  const handleCloseDetail = () => {
+    setSelectedGun(null)
+    if (window.location.search.includes('gun=')) {
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+  }
+
+  // ---- soft delete (archive) ----
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
 
-  const handleDelete = async () => {
+  const handleSoftDelete = async () => {
     if (!deleteTarget) return
     try {
       setDeleting(true)
       setDeleteError('')
-      await gunService.deleteGun(deleteTarget.id)
+      archiveGun(deleteTarget)
+      setArchivedList(getArchivedGuns())
       setDeleteTarget(null)
-      refetch()
     } catch (err) {
-      setDeleteError(err.message || 'Failed to delete.')
+      setDeleteError(err.message || 'Failed to archive product.')
     } finally {
       setDeleting(false)
     }
@@ -80,9 +117,12 @@ export default function Catalog({ onNavigate }) {
     return (
       <GunDetail
         gun={selectedGun}
-        onBack={() => setSelectedGun(null)}
+        onBack={handleCloseDetail}
         onEdit={(g) => onNavigate && onNavigate('Edit', g)}
-        onDelete={(g) => { setSelectedGun(null); setDeleteTarget(g) }}
+        onDelete={(g) => {
+          handleCloseDetail()
+          setDeleteTarget(g)
+        }}
       />
     )
   }
@@ -100,11 +140,30 @@ export default function Catalog({ onNavigate }) {
 
       <section>
         <div className="list-head">
-          <h2>Current stock</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <h2>Current stock</h2>
+            {isCached && (
+              <span
+                className="mono-badge"
+                title="Data served instantly from Query Cache"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '0.75rem' }}
+              >
+                <Database size={12} /> Cached
+              </span>
+            )}
+          </div>
           <div className="list-head-right">
             <span className="count">
               {filteredGuns.length} piece{filteredGuns.length !== 1 ? 's' : ''}
             </span>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={refetch}
+              title="Refresh & invalidate cache"
+            >
+              <RefreshCw size={14} />
+            </button>
             {onNavigate && (
               <button
                 type="button"
@@ -192,15 +251,15 @@ export default function Catalog({ onNavigate }) {
         )}
       </section>
 
-      {/* Delete confirmation */}
+      {/* Soft Delete (Archive) confirmation */}
       <ConfirmModal
         open={!!deleteTarget}
-        title="Delete Product"
-        message={`Are you sure you want to delete "${deleteTarget?.name}"? This action cannot be undone.`}
-        confirmLabel="Delete"
+        title="Archive Hardware (Soft Delete)"
+        message={`Move "${deleteTarget?.name}" to the Archive? You can restore it anytime from your Profile page or delete it permanently there.`}
+        confirmLabel="Archive Item"
         danger
         loading={deleting}
-        onConfirm={handleDelete}
+        onConfirm={handleSoftDelete}
         onCancel={() => { setDeleteTarget(null); setDeleteError('') }}
       />
       {deleteError && (
